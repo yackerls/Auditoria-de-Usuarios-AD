@@ -5,141 +5,110 @@ import json
 # Configuración: Layout "wide"
 st.set_page_config(page_title="Auditoría AD Local", layout="wide")
 
-# --- Encabezado y Carga de Archivos ---
+# --- Encabezado ---
 col1, col2 = st.columns([2, 1.5])
 with col1:
     st.title("🛡️ Reporte de Seguridad AD")
-    st.caption("Modo Privacidad: Los datos se procesan en memoria y no se guardan.")
+    st.caption("Modo Privacidad: Procesamiento en memoria.")
 
 with col2:
     uploaded_file = st.file_uploader(
         "📂 Cargar reporte ad_audit.json",
         type=["json"],
-        help="Sube el archivo JSON generado por PowerShell para analizarlo al instante."
+        help="Sube el archivo JSON generado por PowerShell."
     )
 st.divider()
 
-# --- LÓGICA DE CARGA ---
-df = None
-source_message = ""
-
 if uploaded_file is not None:
     try:
-        # Leer directamente desde la subida
         data = json.load(uploaded_file)
         df = pd.DataFrame(data)
-        source_message = f"✅ Analizando reporte temporal: **{uploaded_file.name}**"
+
+        # --- LIMPIEZA DE DATOS (FECHAS Y BLOQUEOS) ---
         
-    except Exception as e:
-        st.error(f"Error al procesar el archivo JSON: {e}")
-else:
-    st.info("👈 Sube el archivo JSON generado por tu script de AD para ver el reporte.")
+        # 1. Extraer la fecha del objeto de PowerShell
+        def limpiar_fecha(val):
+            if isinstance(val, dict) and 'DateTime' in val:
+                return val['DateTime']
+            return val
 
-# --- INICIO DE LA APP PRINCIPAL ---
-if df is not None:
-    st.success(source_message)
-    try:
-        # Verificar columnas necesarias
-        columnas_req = ['Estado', 'DiasDesdeCambioClave', 'DisplayName']
-        if all(col in df.columns for col in columnas_req):
-            
-            # --- PREPARAR DATOS ---
-            df_bloqueados = df[df['Estado'] == 'Bloqueado'].copy()
-            df_expirados = df[df['DiasDesdeCambioClave'] > 90].copy()
+        df['Fecha_Raw'] = df['UltimaFechaCambio'].apply(limpiar_fecha)
+        # Convertir a formato fecha real para poder ordenar
+        df['Fecha_Objeto'] = pd.to_datetime(df['Fecha_Raw'], errors='coerce')
+        # Crear columna de visualización limpia (YYYY-MM-DD)
+        df['Ultimo Cambio'] = df['Fecha_Objeto'].dt.strftime('%d/%m/%Y')
 
-            # --- PARTE 1: TABLA RESUMEN COMPACTA ---
-            st.markdown("### 📉 Resumen de Alertas Críticas")
-            
-            # Estado de la sesión para filtros
-            if 'filtro_ad' not in st.session_state:
+        # 2. Asegurar que las métricas funcionen
+        df_bloqueados = df[df['Estado'] == 'Bloqueado'].copy()
+        df_expirados = df[df['DiasDesdeCambioClave'] > 90].copy()
+
+        # --- MÉTRICAS ---
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Usuarios", len(df))
+        m2.metric("Bloqueados", len(df_bloqueados), delta_color="inverse")
+        m3.metric("Claves > 90 días", len(df_expirados), delta_color="inverse")
+
+        st.markdown("---")
+
+        # --- TABLA DE ACCIONES ---
+        if 'filtro_ad' not in st.session_state:
+            st.session_state.filtro_ad = None
+
+        c_res = st.columns([3, 1, 1])
+        c_res[0].markdown("**Categoría**")
+        c_res[1].markdown("**Cantidad**")
+        c_res[2].markdown("**Acción**")
+
+        # Fila Bloqueados
+        r1 = st.columns([3, 1, 1])
+        r1[0].write("🚫 Usuarios Bloqueados")
+        r1[1].write(len(df_bloqueados))
+        if r1[2].button("🔍 Ver", key="btn_b"):
+            st.session_state.filtro_ad = "Bloqueado"
+
+        # Fila Expirados
+        r2 = st.columns([3, 1, 1])
+        r2[0].write("🔑 Claves > 90 días")
+        r2[1].write(len(df_expirados))
+        if r2[2].button("🔍 Ver", key="btn_e"):
+            st.session_state.filtro_ad = "Expirado"
+
+        st.divider()
+
+        # --- LÓGICA FILTRO ---
+        df_display = df
+        titulo_tabla = "📋 Todos los Usuarios"
+
+        if st.session_state.filtro_ad == "Bloqueado":
+            df_display = df_bloqueados
+            titulo_tabla = "🚨 Solo Usuarios Bloqueados"
+        elif st.session_state.filtro_ad == "Expirado":
+            df_display = df_expirados
+            titulo_tabla = "⚠️ Solo Claves Expiradas (> 90 días)"
+
+        if st.session_state.filtro_ad:
+            if st.button("❌ Quitar Filtro"):
                 st.session_state.filtro_ad = None
-
-            # Crear métricas rápidas
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Usuarios", len(df))
-            m2.metric("Bloqueados", len(df_bloqueados))
-            m3.metric("Claves > 90 días", len(df_expirados))
-
-            st.markdown("---")
-            
-            # Tabla de acciones estilo el proyecto anterior
-            header_cols = st.columns([3, 1, 1])
-            header_cols[0].markdown("**Categoría de Riesgo**")
-            header_cols[1].markdown("**Cantidad**")
-            header_cols[2].markdown("**Acción**")
-            st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0, 0, 0, 0.1);'>", unsafe_allow_html=True)
-
-            # Fila 1: Bloqueados
-            r1_cols = st.columns([3, 1, 1])
-            r1_cols[0].write("🚫 Usuarios Bloqueados")
-            r1_cols[1].write(f"{len(df_bloqueados)} 👤")
-            if r1_cols[2].button("🔍 Ver Bloqueados", key="btn_bloq"):
-                st.session_state.filtro_ad = "Bloqueado"
                 st.rerun()
 
-            st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0, 0, 0, 0.1);'>", unsafe_allow_html=True)
+        st.subheader(titulo_tabla)
+        
+        # Mapeo de columnas finales
+        cols_finales = {
+            'DisplayName': 'Nombre',
+            'EmailAddress': 'Correo',
+            'Estado': 'Estado',
+            'DiasDesdeCambioClave': 'Días Antigüedad',
+            'Ultimo Cambio': 'Fecha Cambio'
+        }
 
-            # Fila 2: Contraseñas viejas
-            r2_cols = st.columns([3, 1, 1])
-            r2_cols[0].write("🔑 Contraseñas > 3 meses (90 días)")
-            r2_cols[1].write(f"{len(df_expirados)} 👤")
-            if r2_cols[2].button("🔍 Ver Expirados", key="btn_exp"):
-                st.session_state.filtro_ad = "Expirado"
-                st.rerun()
+        # Mostrar tabla ordenada por los días de antigüedad (mayor a menor)
+        df_final = df_display[list(cols_finales.keys())].rename(columns=cols_finales)
+        df_final = df_final.sort_values(by='Días Antigüedad', ascending=False)
 
-            st.divider()
-
-            # --- PARTE 2: LÓGICA DE FILTRADO ---
-            df_filtrado = df
-            mensaje_filtro = "Mostrando: Todos los usuarios del AD"
-
-            if st.session_state.filtro_ad == "Bloqueado":
-                df_filtrado = df_bloqueados
-                mensaje_filtro = "🚨 Filtro Activo: Solo Usuarios Bloqueados"
-            elif st.session_state.filtro_ad == "Expirado":
-                df_filtrado = df_expirados
-                mensaje_filtro = "⚠️ Filtro Activo: Usuarios con Clave > 90 días"
-
-            if st.session_state.filtro_ad:
-                if st.button("❌ Quitar Filtro"):
-                    st.session_state.filtro_ad = None
-                    st.rerun()
-
-            # --- PARTE 3: INVENTARIO DETALLADO ---
-            st.subheader("📋 Detalle de Usuarios")
-            st.info(mensaje_filtro)
-
-            # Mapeo de columnas para que se vean bien
-            cols_map = {
-                'DisplayName': 'Nombre Completo',
-                'EmailAddress': 'Correo Electrónico',
-                'Estado': 'Estado Cuenta',
-                'DiasDesdeCambioClave': 'Días desde última clave',
-                'UltimaFechaCambio': 'Fecha de Cambio'
-            }
-
-            cols_existentes = [c for c in cols_map.keys() if c in df_filtrado.columns]
-            
-            if cols_existentes:
-                df_final = df_filtrado[cols_existentes].rename(columns=cols_map)
-                
-                # Estilo condicional: Rojo si está bloqueado o > 90 días
-                def highlight_risks(row):
-                    style = [''] * len(row)
-                    if row['Estado Cuenta'] == 'Bloqueado' or row['Días desde última clave'] > 90:
-                        style = ['background-color: #ffe6e6'] * len(row)
-                    return style
-
-                st.dataframe(
-                    df_final.style.apply(highlight_risks, axis=1),
-                    use_container_width=True,
-                    hide_index=True
-                )
-            else:
-                st.warning("No se encontraron columnas de detalle en el JSON.")
-
-        else:
-            st.error("El JSON debe contener: 'Estado', 'DiasDesdeCambioClave' y 'DisplayName'.")
+        st.dataframe(df_final, use_container_width=True, hide_index=True)
 
     except Exception as e:
-        st.error(f"Error al procesar los datos: {e}")
+        st.error(f"Error: {e}")
+else:
+    st.info("Por favor, carga el archivo 'ad_audit.json'.")
