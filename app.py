@@ -4,12 +4,12 @@ import json
 from datetime import datetime
 
 # 1. Configuración: Layout "wide"
-st.set_page_config(page_title="Auditoría de Contraseñas AD", layout="wide")
+st.set_page_config(page_title="Auditoría de Cuentas AD", layout="wide")
 
 # --- Encabezado y Carga de Archivos ---
 col1, col2 = st.columns([2, 1.5])
 with col1:
-    st.title("🔒 Reporte de Seguridad: Contraseñas")
+    st.title("🔒 Reporte de Seguridad: Identidades AD")
     st.caption("Modo Privacidad: Los datos se procesan en memoria y no se guardan.")
 
 with col2:
@@ -44,81 +44,102 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
 else:
-    st.info("👈 Sube el archivo JSON en el panel de arriba para ver el reporte.")
+    st.info("👈 Sube el archivo JSON para ver el análisis de cuentas.")
 
 # --- INICIO DE LA APP PRINCIPAL ---
 if df is not None:
     st.success(source_message)
     
     # --- PREPARAR DATOS ---
-    # Filtrar usuarios que exceden los 90 días (3 meses)
     df_expirados = df[df['DiasDesdeCambioClave'] > 90].copy()
+    df_deshabilitados = df[df['Estado'] == 'Deshabilitado'].copy()
+    df_al_dia = df[(df['DiasDesdeCambioClave'] <= 90) & (df['Estado'] == 'Activo')].copy()
     
     # --- PARTE 1: TABLA RESUMEN COMPACTA (Estilo Office) ---
     st.markdown("### 📉 Resumen de Cumplimiento")
-    st.caption("Haz clic en 'Ver' para filtrar la lista de abajo.")
+    st.caption("Haz clic en 'Ver' para filtrar la lista detallada.")
     
-    # Estado de la sesión para filtros
-    if 'licencia_seleccionada' not in st.session_state:
-        st.session_state.licencia_seleccionada = None
+    if 'filtro_seleccionado' not in st.session_state:
+        st.session_state.filtro_seleccionado = None
 
-    # Cabecera de tabla de resumen
     header_cols = st.columns([3, 1, 1])
-    header_cols[0].markdown("**Estado de Política**")
+    header_cols[0].markdown("**Estado de la Cuenta / Política**")
     header_cols[1].markdown("**Usuarios**")
     header_cols[2].markdown("**Acción**")
-    st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0,0,0,0.1);'>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0, 0, 0, 0.1);'>", unsafe_allow_html=True)
 
-    # Fila: Usuarios fuera de política
+    # Fila 1: Expirados
     r1_cols = st.columns([3, 1, 1])
     r1_cols[0].write("⚠️ Contraseñas Expiradas (> 90 días)")
     r1_cols[1].write(f"{len(df_expirados)} 👤")
-    if r1_cols[2].button("🔍 Ver", key="btn_criticos"):
-        st.session_state.licencia_seleccionada = "Expirado"
+    if r1_cols[2].button("🔍 Ver", key="btn_expirados"):
+        st.session_state.filtro_seleccionado = "Expirado"
         st.rerun()
 
-    st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0,0,0,0.1);'>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0, 0, 0, 0.1);'>", unsafe_allow_html=True)
 
-    # Fila: Usuarios al día
-    df_al_dia = df[df['DiasDesdeCambioClave'] <= 90]
+    # Fila 2: Deshabilitados
     r2_cols = st.columns([3, 1, 1])
-    r2_cols[0].write("✅ Contraseñas al Día")
-    r2_cols[1].write(f"{len(df_al_dia)} 👤")
-    if r2_cols[2].button("🔍 Ver", key="btn_aldia"):
-        st.session_state.licencia_seleccionada = "AlDia"
+    r2_cols[0].write("🌑 Cuentas Deshabilitadas")
+    r2_cols[1].write(f"{len(df_deshabilitados)} 👤")
+    if r2_cols[2].button("🔍 Ver", key="btn_deshab"):
+        st.session_state.filtro_seleccionado = "Deshabilitado"
+        st.rerun()
+
+    st.markdown("<hr style='margin:0.5rem 0; border-top: 1px solid rgba(0, 0, 0, 0.1);'>", unsafe_allow_html=True)
+
+    # Fila 3: Usuarios al día
+    r3_cols = st.columns([3, 1, 1])
+    r3_cols[0].write("✅ Contraseñas al Día (Activos)")
+    r3_cols[1].write(f"{len(df_al_dia)} 👤")
+    if r3_cols[2].button("🔍 Ver", key="btn_aldia"):
+        st.session_state.filtro_seleccionado = "AlDia"
         st.rerun()
 
     st.divider()
 
-    # --- PARTE 2: LÓGICA DE FILTRADO ---
+    # --- PARTE 2: BUSCADOR Y LÓGICA DE FILTRADO ---
+    st.subheader("📋 Inventario Detallado")
+    
+    # Buscador de usuarios
+    search_query = st.text_input("🔍 Buscar por Nombre o Correo:", placeholder="Ej: Juan Perez o admin@dominio.com")
+
     df_filtrado = df
     mensaje_filtro = "Mostrando: Todos los usuarios"
 
-    if st.session_state.licencia_seleccionada == "Expirado":
+    # Aplicar Filtro de Botones
+    if st.session_state.filtro_seleccionado == "Expirado":
         df_filtrado = df_expirados
-        mensaje_filtro = "🚨 Filtro Activo: Usuarios fuera de política (> 90 días)"
-    elif st.session_state.licencia_seleccionada == "AlDia":
+        mensaje_filtro = "🚨 Filtro Activo: Usuarios con clave > 90 días"
+    elif st.session_state.filtro_seleccionado == "Deshabilitado":
+        df_filtrado = df_deshabilitados
+        mensaje_filtro = "🌑 Filtro Activo: Cuentas Deshabilitadas"
+    elif st.session_state.filtro_seleccionado == "AlDia":
         df_filtrado = df_al_dia
-        mensaje_filtro = "✅ Filtro Activo: Usuarios cumpliendo la política"
+        mensaje_filtro = "✅ Filtro Activo: Usuarios con clave reciente y activos"
 
-    if st.session_state.licencia_seleccionada:
-        if st.button("❌ Quitar Filtro"):
-            st.session_state.licencia_seleccionada = None
+    # Aplicar Filtro de Búsqueda (Texto)
+    if search_query:
+        df_filtrado = df_filtrado[
+            df_filtrado['DisplayName'].str.contains(search_query, case=False, na=False) |
+            df_filtrado['EmailAddress'].str.contains(search_query, case=False, na=False)
+        ]
+        mensaje_filtro += f" | 🔍 Búsqueda: '{search_query}'"
+
+    # Botón para limpiar filtros
+    col_msg, col_reset = st.columns([8, 2])
+    col_msg.info(mensaje_filtro)
+    if st.session_state.filtro_seleccionado or search_query:
+        if col_reset.button("❌ Limpiar Todo"):
+            st.session_state.filtro_seleccionado = None
             st.rerun()
 
-    # --- PARTE 3: INVENTARIO DETALLADO ---
-    col_header, col_count = st.columns([8, 2])
-    col_header.subheader("📋 Inventario Detallado")
-    col_count.metric("Encontrados", len(df_filtrado))
-    
-    st.info(mensaje_filtro)
-
-    # Mapeo de columnas para que coincida con lo que necesitas
+    # --- PARTE 3: MESA DE DATOS ---
     cols_map = {
         'DisplayName': 'Nombre',
         'EmailAddress': 'Correo',
         'Estado': 'Estado Cuenta',
-        'DiasDesdeCambioClave': 'Días de Antigüedad',
+        'DiasDesdeCambioClave': 'Días Antigüedad',
         'Fecha_Formateada': 'Último Cambio'
     }
 
@@ -127,15 +148,16 @@ if df is not None:
     if cols_existentes:
         df_final = df_filtrado[cols_existentes].rename(columns=cols_map)
         
-        # Mostramos la tabla limpia sin colores raros que bloqueen la vista
+        st.metric("Usuarios en vista", len(df_final))
+        
         st.dataframe(
-            df_final.sort_values(by='Días de Antigüedad', ascending=False),
+            df_final.sort_values(by='Días Antigüedad', ascending=False),
             use_container_width=True,
             hide_index=True
         )
         
-        # Botón de descarga al final
+        # Botón de descarga
         csv = df_final.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Descargar Reporte CSV", data=csv, file_name="auditoria_ad.csv", mime='text/csv')
+        st.download_button("📥 Descargar Vista Actual (CSV)", data=csv, file_name="auditoria_ad_filtrada.csv", mime='text/csv')
     else:
-        st.warning("No se encontraron las columnas necesarias en el archivo.")
+        st.warning("No se encontraron columnas para mostrar.")
